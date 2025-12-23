@@ -1,82 +1,87 @@
-# project_cti_textclf.py
-import warnings
-warnings.filterwarnings("ignore")  # option: enlève les warnings sklearn (convergence/metrics)
+import pandas as pd
 
-import numpy as np
+print("hello world")
+raw_path = "cyber-threat-intelligence_all.csv"
+raw = pd.read_csv(raw_path)
+
+print("RAW shape:", raw.shape)
+print("RAW columns:", list(raw.columns))
+raw.head(10)
+
+print("\nMissing values per column:")
+print(raw.isna().sum().sort_values(ascending=False))
+
+print("\nNumber of duplicated rows:", raw.duplicated().sum())
+
+# Duplicates by text only (useful in NLP)
+if "text" in raw.columns:
+    print("Duplicated 'text' rows:", raw.duplicated(subset=["text"]).sum())
+
+raw[["text", "label"]].head(10)
+
+clean = raw.copy()
+
+# Keep only usable samples
+clean = clean.dropna(subset=["text", "label"]).copy()
+clean["text"] = clean["text"].astype(str).str.strip()
+clean["label"] = clean["label"].astype(str).str.strip()
+
+# Remove empty text
+clean = clean[clean["text"].str.len() > 0].copy()
+
+# Optional: remove exact duplicated text
+clean = clean.drop_duplicates(subset=["text"]).copy()
+
+print("CLEAN shape:", clean.shape)
+clean.head(5)
+
+counts = clean["label"].value_counts()
+print("Number of classes:", counts.shape[0])
+counts.head(10)
+
+import pandas as pd
+
+train = pd.read_csv("cyber-threat-intelligence-splited_train.csv").dropna(subset=["text","label"])
+val   = pd.read_csv("cyber-threat-intelligence-splited_validate.csv").dropna(subset=["text","label"])
+test  = pd.read_csv("cyber-threat-intelligence-splited_test.csv").dropna(subset=["text","label"])
+
+# sécurité
+for df in (train, val, test):
+    df["text"] = df["text"].astype(str)
+    df["label"] = df["label"].astype(str)
+
+print("Shapes:", train.shape, val.shape, test.shape)
+print("Nb classes:", train["label"].nunique())
+
 import pandas as pd
 import matplotlib.pyplot as plt
 
+train_path = "cyber-threat-intelligence-splited_train.csv"
+train = pd.read_csv(train_path).dropna(subset=["text", "label"]).copy()
+train["text"] = train["text"].astype(str)
+train["label"] = train["label"].astype(str)
+
+print("Train shape:", train.shape)
+train[["text", "label"]].head(5)
+
+top10 = train["label"].value_counts().head(10)
+top10
+
+plt.figure(figsize=(10, 5))
+top10.plot(kind="bar")
+plt.title("Top 10 label distribution (Train)")
+plt.xlabel("Label")
+plt.ylabel("Count")
+plt.xticks(rotation=45, ha="right")
+plt.tight_layout()
+plt.show()
+
 from sklearn.pipeline import Pipeline
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import GridSearchCV, PredefinedSplit
-from sklearn.metrics import (
-    accuracy_score, f1_score, classification_report, confusion_matrix
-)
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import LinearSVC
 from sklearn.naive_bayes import MultinomialNB
 
-try:
-    import joblib
-except ImportError:
-    joblib = None
-
-
-# -----------------------------
-# 1) Data loading
-# -----------------------------
-TRAIN_PATH = "cyber-threat-intelligence-splited_train.csv"
-VAL_PATH   = "cyber-threat-intelligence-splited_validate.csv"
-TEST_PATH  = "cyber-threat-intelligence-splited_test.csv"
-
-def load_split(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    df = df.dropna(subset=["text", "label"]).copy()
-    df["text"] = df["text"].astype(str)
-    df["label"] = df["label"].astype(str)
-    return df
-
-train = load_split(TRAIN_PATH)
-val   = load_split(VAL_PATH)
-test  = load_split(TEST_PATH)
-
-print("Shapes:", train.shape, val.shape, test.shape)
-print("Nb classes (train):", train["label"].nunique())
-
-
-# -----------------------------
-# 2) Eval helpers
-# -----------------------------
-def eval_on(df: pd.DataFrame, model, name: str):
-    pred = model.predict(df["text"])
-    acc = accuracy_score(df["label"], pred)
-    f1w = f1_score(df["label"], pred, average="weighted")
-    f1m = f1_score(df["label"], pred, average="macro")
-    print(f"\n=== {name} ===")
-    print("Accuracy:", round(acc, 4))
-    print("F1-weighted:", round(f1w, 4))
-    print("F1-macro:", round(f1m, 4))
-    return acc, f1w, f1m
-
-def plot_confusion_matrix(y_true, y_pred, labels, title, out_path):
-    cm = confusion_matrix(y_true, y_pred, labels=labels)
-    plt.figure(figsize=(10, 8))
-    plt.imshow(cm, interpolation="nearest")
-    plt.title(title)
-    plt.colorbar()
-    tick_marks = np.arange(len(labels))
-    plt.xticks(tick_marks, labels, rotation=90)
-    plt.yticks(tick_marks, labels)
-    plt.tight_layout()
-    plt.ylabel("True label")
-    plt.xlabel("Predicted label")
-    plt.savefig(out_path, dpi=200, bbox_inches="tight")
-    plt.close()
-
-
-# -----------------------------
-# 3) Baselines (standard solutions)
-# -----------------------------
 models = {
     "LR": Pipeline([
         ("tfidf", TfidfVectorizer(max_features=30000)),
@@ -92,26 +97,34 @@ models = {
     ])
 }
 
-baseline_results = []
+from sklearn.metrics import accuracy_score, f1_score, classification_report
+
+def eval_on(df, model, name="model"):
+    pred = model.predict(df["text"])
+    acc = accuracy_score(df["label"], pred)
+    f1w = f1_score(df["label"], pred, average="weighted")
+    f1m = f1_score(df["label"], pred, average="macro")
+    print(f"\n=== {name} ===")
+    print("Accuracy:", round(acc, 4))
+    print("F1-weighted:", round(f1w, 4))
+    print("F1-macro:", round(f1m, 4))
+    return acc, f1w, f1m
+
+# Fit sur train, évalue sur val
+results = {}
 for name, model in models.items():
     model.fit(train["text"], train["label"])
-    acc, f1w, f1m = eval_on(val, model, name=f"{name} (VAL)")
-    baseline_results.append([name, "baseline", acc, f1w, f1m])
+    results[name] = eval_on(val, model, name=f"{name} (VAL)")
 
-baseline_df = pd.DataFrame(baseline_results, columns=["model", "stage", "val_acc", "val_f1w", "val_f1m"])
-print("\nBaseline summary:\n", baseline_df)
+import numpy as np
+from sklearn.model_selection import GridSearchCV, PredefinedSplit
 
-
-# -----------------------------
-# 4) GridSearch on fixed validation (PredefinedSplit)
-# -----------------------------
 X_trainval = pd.concat([train["text"], val["text"]], axis=0).reset_index(drop=True)
 y_trainval = pd.concat([train["label"], val["label"]], axis=0).reset_index(drop=True)
 
 test_fold = np.r_[-np.ones(len(train), dtype=int), np.zeros(len(val), dtype=int)]
 ps = PredefinedSplit(test_fold)
 
-# ---- GridSearch: Logistic Regression
 pipe_lr = Pipeline([
     ("tfidf", TfidfVectorizer()),
     ("clf", LogisticRegression(max_iter=2000, solver="saga", class_weight="balanced", n_jobs=-1))
@@ -130,17 +143,52 @@ grid_lr = GridSearchCV(
     param_grid=param_grid_lr,
     scoring="f1_weighted",
     cv=ps,
-    n_jobs=-1,
-    verbose=1
+    n_jobs=-1
 )
+
 grid_lr.fit(X_trainval, y_trainval)
 
 print("\n=== GRID SEARCH LR ===")
 print("Best params:", grid_lr.best_params_)
 print("Best VAL f1_weighted:", round(grid_lr.best_score_, 4))
-best_lr = grid_lr.best_estimator_
 
-# ---- GridSearch: LinearSVC
+best_model = grid_lr.best_estimator_
+
+# Refit sur train+val puis test
+best_model.fit(X_trainval, y_trainval)
+
+print("\n=== FINAL TEST (Best LR) ===")
+eval_on(test, best_model, name="Best LR (TEST)")
+
+print("\nClassification report (TEST):")
+test_pred = best_model.predict(test["text"])
+print(classification_report(test["label"], test_pred, zero_division=0))
+
+from sklearn.ensemble import VotingClassifier
+
+# estimators doivent être "des modèles", pas des pipelines identiques.
+# Ici on fait 3 pipelines différents.
+lr = models["LR"]
+svm = models["LinearSVC"]
+nb  = models["NB"]
+
+voting = VotingClassifier(
+    estimators=[("lr", lr), ("svm", svm), ("nb", nb)],
+    voting="hard"
+)
+
+voting.fit(train["text"], train["label"])
+eval_on(val, voting, name="Voting (VAL)")
+
+# si tu veux le test final, refit sur train+val
+voting.fit(X_trainval, y_trainval)
+eval_on(test, voting, name="Voting (TEST)")
+
+from sklearn.svm import LinearSVC
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import GridSearchCV
+
 pipe_svc = Pipeline([
     ("tfidf", TfidfVectorizer()),
     ("clf", LinearSVC(class_weight="balanced"))
@@ -158,68 +206,37 @@ grid_svc = GridSearchCV(
     pipe_svc,
     param_grid=param_grid_svc,
     scoring="f1_weighted",
-    cv=ps,
-    n_jobs=-1,
-    verbose=1
+    cv=ps,      # ton PredefinedSplit train/val
+    n_jobs=-1
 )
+
 grid_svc.fit(X_trainval, y_trainval)
+print("Best SVC params:", grid_svc.best_params_)
+print("Best SVC VAL f1_weighted:", grid_svc.best_score_)
 
-print("\n=== GRID SEARCH SVC ===")
-print("Best params:", grid_svc.best_params_)
-print("Best VAL f1_weighted:", round(grid_svc.best_score_, 4))
-best_svc = grid_svc.best_estimator_
+best_svc = grid_svc.best_estimator_   # si ton objet s'appelle grid_svc
+# ou best_svc = grid.best_estimator_ si tu l'as appelé autrement
 
+best_svc.fit(X_trainval, y_trainval)
 
-# -----------------------------
-# 5) Final test evaluation (refit on train+val, then test)
-# -----------------------------
-candidates = [
-    ("Best LR (GridSearch)", best_lr, grid_lr.best_score_),
-    ("Best SVC (GridSearch)", best_svc, grid_svc.best_score_),
-]
+from sklearn.metrics import accuracy_score, f1_score, classification_report
 
-final_rows = []
-for name, model, val_f1w in candidates:
-    model.fit(X_trainval, y_trainval)
-    pred_test = model.predict(test["text"])
-    acc = accuracy_score(test["label"], pred_test)
-    f1w = f1_score(test["label"], pred_test, average="weighted")
-    f1m = f1_score(test["label"], pred_test, average="macro")
-    final_rows.append([name, val_f1w, acc, f1w, f1m])
-
-final_df = pd.DataFrame(final_rows, columns=["model", "val_f1w", "test_acc", "test_f1w", "test_f1m"])
-print("\nFinal comparison:\n", final_df)
-
-# pick best on test_f1w
-best_name = final_df.sort_values("test_f1w", ascending=False).iloc[0]["model"]
-best_model = best_svc if "SVC" in best_name else best_lr
-print("\n>>> FINAL MODEL CHOSEN:", best_name)
-
-# Detailed report for final model
-best_model.fit(X_trainval, y_trainval)
-final_pred = best_model.predict(test["text"])
-print("\n=== FINAL TEST REPORT ===")
-print("Accuracy:", round(accuracy_score(test["label"], final_pred), 4))
-print("F1-weighted:", round(f1_score(test["label"], final_pred, average="weighted"), 4))
-print("F1-macro:", round(f1_score(test["label"], final_pred, average="macro"), 4))
+test_pred = best_svc.predict(test["text"])
+print("=== FINAL TEST (Best SVC) ===")
+print("Test Accuracy:", round(accuracy_score(test["label"], test_pred), 4))
+print("Test F1-weighted:", round(f1_score(test["label"], test_pred, average="weighted"), 4))
+print("Test F1-macro:", round(f1_score(test["label"], test_pred, average="macro"), 4))
 print("\nClassification report:\n")
-print(classification_report(test["label"], final_pred, zero_division=0))
+print(classification_report(test["label"], test_pred, zero_division=0))
 
-# Confusion matrix plot
-labels_sorted = sorted(test["label"].unique())
-plot_confusion_matrix(
-    test["label"], final_pred, labels_sorted,
-    title=f"Confusion Matrix - {best_name}",
-    out_path="confusion_matrix_final.png"
-)
-print("\nSaved: confusion_matrix_final.png")
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
 
-# Save outputs
-final_df.to_csv("results_summary.csv", index=False)
-print("Saved: results_summary.csv")
+tree_model = Pipeline([
+    ("tfidf", TfidfVectorizer(max_features=30000)),
+    ("clf", DecisionTreeClassifier(random_state=42))
+])
 
-if joblib is not None:
-    joblib.dump(best_model, "best_model.joblib")
-    print("Saved: best_model.joblib")
-else:
-    print("joblib not installed -> model not saved")
+tree_model.fit(train["text"], train["label"])
+eval_on(val, tree_model, name="DecisionTree (VAL)")
